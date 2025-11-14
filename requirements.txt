@@ -1,7 +1,4 @@
 streamlit
-web3
 ultralytics
-requests
+web3
 pillow
-qrcode
-reportlab
