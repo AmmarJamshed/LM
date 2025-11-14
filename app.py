@@ -36,10 +36,15 @@ if file:
     image = Image.open(file)
     st.image(image, caption="Uploaded Image", use_column_width=True)
 
-    # Convert to bytes
-    img_bytes = io.BytesIO()
-    image.save(img_bytes, format="JPEG")
-    img_bytes = img_bytes.getvalue()
+    # Convert to bytes safely
+    buf = io.BytesIO()
+
+    # 🔥 FIX: convert all images to RGB (PNG, RGBA, CMYK → RGB)
+    if image.mode != "RGB":
+        image = image.convert("RGB")
+
+    image.save(buf, format="JPEG")
+    img_bytes = buf.getvalue()
 
     st.subheader("🔍 Running AI detection...")
 
