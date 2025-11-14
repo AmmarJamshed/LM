@@ -10,6 +10,7 @@ from pathlib import Path
 RPC_URL = st.secrets["blockchain"]["RPC_URL"]
 PRIVATE_KEY = st.secrets["blockchain"]["PRIVATE_KEY"]
 CONTRACT_ADDRESS = st.secrets["blockchain"]["CONTRACT_ADDRESS"]
+contract_abi = json.loads(st.secrets["blockchain"]["ABI"])
 
 # -----------------------------
 # Web3 Setup
@@ -89,3 +90,4 @@ if uploaded:
 
 
 st.info("Private keys are securely stored using Streamlit Secrets (not in app.py).")
+
