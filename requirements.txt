@@ -1,6 +1,7 @@
 streamlit
-torch
-torchvision
-ultralytics
 web3
-Pillow
+ultralytics
+requests
+pillow
+qrcode
+reportlab
