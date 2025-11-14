@@ -1,5 +1,6 @@
 streamlit
+torch
+torchvision
+ultralytics
 web3
-solcx
-python-dotenv
 Pillow
