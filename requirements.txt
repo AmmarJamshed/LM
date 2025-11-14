@@ -3,3 +3,4 @@ ultralytics
 web3
 pillow
 inference-sdk
+reportlab
