@@ -1,59 +1,70 @@
 import streamlit as st
-from ultralytics import YOLOv8
+import requests
+import base64
 from web3 import Web3
-import json
 from PIL import Image
+import io
+import json
 
 st.set_page_config(page_title="LivestockMon", layout="wide")
-st.title("🐮 LivestockMon – AI Livestock Detection + NFT Minting")
 
-# -------------------------
-# Load Secrets
-# -------------------------
+st.title("🐮 LivestockMon — Cloud Livestock Detection + NFT Minting")
+
+# ---------------------------
+# Load Blockchain Secrets
+# ---------------------------
 RPC_URL = st.secrets["blockchain"]["RPC_URL"]
 PRIVATE_KEY = st.secrets["blockchain"]["PRIVATE_KEY"]
 CONTRACT_ADDRESS = st.secrets["blockchain"]["CONTRACT_ADDRESS"]
 ABI = json.loads(st.secrets["blockchain"]["ABI"])
+ROBOFLOW_API = st.secrets["blockchain"]["ROBOFLOW_API"]
 
-# -------------------------
-# Blockchain Setup
-# -------------------------
+# Blockchain setup
 w3 = Web3(Web3.HTTPProvider(RPC_URL))
 account = w3.eth.account.from_key(PRIVATE_KEY)
 contract = w3.eth.contract(address=Web3.to_checksum_address(CONTRACT_ADDRESS), abi=ABI)
 
-# -------------------------
-# Load YOLOv8 from HuggingFace
-# -------------------------
-@st.cache_resource
-def load_model():
-    return YOLOv8.from_pretrained("Ultralytics/YOLOv8")
+# ---------------------------
+# Upload Image
+# ---------------------------
+uploaded = st.file_uploader("Upload livestock image...", type=["jpg", "jpeg", "png"])
 
-model = load_model()
-
-st.subheader("📸 Upload Livestock Image")
-uploaded_file = st.file_uploader("Upload an image...", type=["jpg", "jpeg", "png"])
-
-if uploaded_file:
-    img = Image.open(uploaded_file)
+if uploaded:
+    img = Image.open(uploaded)
     st.image(img, caption="Uploaded Image", use_column_width=True)
 
-    st.write("Running AI detection...")
-    results = model.predict(source=img)
+    # Convert image to base64 for API
+    buffer = io.BytesIO()
+    img.save(buffer, format="JPEG")
+    img_b64 = base64.b64encode(buffer.getvalue()).decode()
 
-    # Display prediction results
-    st.subheader("🔍 Detection Results")
-    st.json(results[0].to_json())
+    st.subheader("🔍 AI Detection")
+    st.write("Running livestock detection via Roboflow Cloud...")
 
-    # Extract simplified detection labels
-    st.write("Detected objects:")
-    labels = [model.names[int(box.cls)] for box in results[0].boxes]
-    st.write(labels)
+    # Roboflow Hosted Infer API
+    response = requests.post(
+        "https://detect.roboflow.com/livestock/1",
+        params={"api_key": ROBOFLOW_API},
+        data=buffer.getvalue(),
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
 
-    # Token URI (metadata URL)
-    token_uri = st.text_input("Enter tokenURI for NFT", "https://example.com/metadata.json")
+    result = response.json()
+    st.json(result)
 
-    if st.button("Mint Livestock NFT"):
+    # Show detections
+    if "predictions" in result:
+        labels = [p["class"] for p in result["predictions"]]
+        st.write("Detected Animals:", labels)
+    else:
+        st.warning("No livestock detected")
+
+    # -----------------------
+    # NFT Mint
+    # -----------------------
+    token_uri = st.text_input("Enter Token URI", "https://example.com/metadata.json")
+
+    if st.button("Mint NFT"):
         try:
             nonce = w3.eth.get_transaction_count(account.address)
             tx = contract.functions.mintLivestockNFT(
@@ -66,11 +77,11 @@ if uploaded_file:
                 'gasPrice': w3.eth.gas_price,
             })
 
-            signed_tx = w3.eth.account.sign_transaction(tx, PRIVATE_KEY)
-            tx_hash = w3.eth.send_raw_transaction(signed_tx.rawTransaction)
+            signed = w3.eth.account.sign_transaction(tx, PRIVATE_KEY)
+            tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
 
-            st.success(f"NFT Minted Successfully!")
-            st.write(f"🔗 Transaction: https://sepolia.etherscan.io/tx/{tx_hash.hex()}")
+            st.success("NFT Minted Successfully!")
+            st.write("🔗 Tx:", f"https://sepolia.etherscan.io/tx/{tx_hash.hex()}")
 
         except Exception as e:
-            st.error(f"Minting failed: {str(e)}")
+            st.error(str(e))
