@@ -1,110 +1,77 @@
 import streamlit as st
+from ultralytics import YOLOv8
 from web3 import Web3
 import json
-import time
-import os
-from ultralytics import YOLO
-import base64
-import requests
+from PIL import Image
 
 st.set_page_config(page_title="LivestockMon", layout="wide")
+st.title("🐮 LivestockMon – AI Livestock Detection + NFT Minting")
 
-# -------------------
-# Load secrets
-# -------------------
+# -------------------------
+# Load Secrets
+# -------------------------
 RPC_URL = st.secrets["blockchain"]["RPC_URL"]
 PRIVATE_KEY = st.secrets["blockchain"]["PRIVATE_KEY"]
 CONTRACT_ADDRESS = st.secrets["blockchain"]["CONTRACT_ADDRESS"]
-ABI = json.loads(st.secrets["contract"]["ABI"])
+ABI = json.loads(st.secrets["blockchain"]["ABI"])
 
-# -------------------
-# Setup blockchain
-# -------------------
-web3 = Web3(Web3.HTTPProvider(RPC_URL))
-account = web3.eth.account.from_key(PRIVATE_KEY)
-contract = web3.eth.contract(address=Web3.to_checksum_address(CONTRACT_ADDRESS), abi=ABI)
+# -------------------------
+# Blockchain Setup
+# -------------------------
+w3 = Web3(Web3.HTTPProvider(RPC_URL))
+account = w3.eth.account.from_key(PRIVATE_KEY)
+contract = w3.eth.contract(address=Web3.to_checksum_address(CONTRACT_ADDRESS), abi=ABI)
 
-# -------------------
-# Load YOLO Model
-# -------------------
-model = YOLO("yolov8n.pt")
+# -------------------------
+# Load YOLOv8 from HuggingFace
+# -------------------------
+@st.cache_resource
+def load_model():
+    return YOLOv8.from_pretrained("Ultralytics/YOLOv8")
 
-# -------------------
-# Helper: Upload file to IPFS (Web3Storage)
-# -------------------
-W3S_TOKEN = "https://api.web3.storage/upload"
-# If you have a real token, set secrets["ipfs"]["W3S"] = "KEY"
+model = load_model()
 
-def upload_to_ipfs(file_bytes, file_name):
-    headers = {
-        "Authorization": f"Bearer {st.secrets['ipfs']['W3S']}",
-    }
-    files = {
-        "file": (file_name, file_bytes)
-    }
-    response = requests.post(W3S_TOKEN, headers=headers, files=files)
+st.subheader("📸 Upload Livestock Image")
+uploaded_file = st.file_uploader("Upload an image...", type=["jpg", "jpeg", "png"])
 
-    cid = response.json()["cid"]
-    return f"https://{cid}.ipfs.w3s.link/{file_name}"
+if uploaded_file:
+    img = Image.open(uploaded_file)
+    st.image(img, caption="Uploaded Image", use_column_width=True)
 
-# -------------------
-# UI
-# -------------------
-st.title("🐄 LivestockMon — AI Livestock NFT Identity")
+    st.write("Running AI detection...")
+    results = model.predict(source=img)
 
-uploaded_image = st.file_uploader("Upload a livestock image", type=["jpg", "png", "jpeg"])
+    # Display prediction results
+    st.subheader("🔍 Detection Results")
+    st.json(results[0].to_json())
 
-if uploaded_image:
+    # Extract simplified detection labels
+    st.write("Detected objects:")
+    labels = [model.names[int(box.cls)] for box in results[0].boxes]
+    st.write(labels)
 
-    st.image(uploaded_image, caption="Uploaded Image", use_column_width=True)
+    # Token URI (metadata URL)
+    token_uri = st.text_input("Enter tokenURI for NFT", "https://example.com/metadata.json")
 
-    # YOLO prediction
-    with st.spinner("Detecting livestock..."):
-        results = model.predict(uploaded_image.getvalue())
-        boxes = results[0].boxes
-
-    if len(boxes) == 0:
-        st.error("❌ No livestock detected.")
-        st.stop()
-
-    st.success(f"Detected {len(boxes)} animal(s).")
-
-    # Upload image to IPFS
-    with st.spinner("Uploading image to IPFS..."):
-        image_ipfs = upload_to_ipfs(uploaded_image.getvalue(), uploaded_image.name)
-
-    # Build metadata
-    metadata = {
-        "name": "Livestock Passport NFT",
-        "description": "Certified on-chain livestock identity",
-        "image": image_ipfs,
-    }
-
-    metadata_bytes = json.dumps(metadata).encode()
-    meta_ipfs = upload_to_ipfs(metadata_bytes, "metadata.json")
-
-    st.success("Metadata uploaded to IPFS!")
-    st.json(metadata)
-
-    # Mint NFT
-    if st.button("Mint NFT"):
-        with st.spinner("Minting NFT on blockchain..."):
-            nonce = web3.eth.get_transaction_count(account.address)
-
-            txn = contract.functions.mintLivestockNFT(
+    if st.button("Mint Livestock NFT"):
+        try:
+            nonce = w3.eth.get_transaction_count(account.address)
+            tx = contract.functions.mintLivestockNFT(
                 account.address,
-                meta_ipfs
+                token_uri
             ).build_transaction({
-                "from": account.address,
-                "nonce": nonce,
-                "gas": 500000,
-                "gasPrice": web3.to_wei("2", "gwei"),
+                'from': account.address,
+                'nonce': nonce,
+                'gas': 300000,
+                'gasPrice': w3.eth.gas_price,
             })
 
-            signed_txn = web3.eth.account.sign_transaction(txn, private_key=PRIVATE_KEY)
-            tx_hash = web3.eth.send_raw_transaction(signed_txn.rawTransaction)
-            receipt = web3.eth.wait_for_transaction_receipt(tx_hash)
+            signed_tx = w3.eth.account.sign_transaction(tx, PRIVATE_KEY)
+            tx_hash = w3.eth.send_raw_transaction(signed_tx.rawTransaction)
 
-        st.success("NFT Minted Successfully!")
-        st.write("Transaction Hash:", tx_hash.hex())
-        st.write("Metadata:", meta_ipfs)
+            st.success(f"NFT Minted Successfully!")
+            st.write(f"🔗 Transaction: https://sepolia.etherscan.io/tx/{tx_hash.hex()}")
+
+        except Exception as e:
+            st.error(f"Minting failed: {str(e)}")
+
