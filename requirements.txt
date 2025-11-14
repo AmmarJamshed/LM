@@ -2,3 +2,4 @@ streamlit
 ultralytics
 web3
 pillow
+inference-sdk
