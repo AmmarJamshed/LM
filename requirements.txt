@@ -1,4 +1,4 @@
-streamlit==1.32.0
+streamlit==1.37.0
 inference-sdk==0.9.13
 web3==6.16.0
 Pillow==10.2.0
