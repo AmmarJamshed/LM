@@ -1,68 +1,76 @@
 import streamlit as st
-import requests
-import base64
+from inference_sdk import InferenceHTTPClient
 from web3 import Web3
+import json
 from PIL import Image
 import io
-import json
 
 st.set_page_config(page_title="LivestockMon", layout="wide")
-
-st.title("🐮 LivestockMon — Cloud Livestock Detection + NFT Minting")
+st.title("🐄 LivestockMon — AI Livestock Detection + NFT Minting")
 
 # ---------------------------
-# Load Blockchain Secrets
+# Load Secrets from Streamlit Cloud
 # ---------------------------
 RPC_URL = st.secrets["blockchain"]["RPC_URL"]
 PRIVATE_KEY = st.secrets["blockchain"]["PRIVATE_KEY"]
 CONTRACT_ADDRESS = st.secrets["blockchain"]["CONTRACT_ADDRESS"]
 ABI = json.loads(st.secrets["blockchain"]["ABI"])
-ROBOFLOW_API = st.secrets["blockchain"]["ROBOFLOW_API"]
 
-# Blockchain setup
+# Roboflow API
+ROBOFLOW_API = st.secrets["blockchain"]["ROBOFLOW_API"]
+ROBOFLOW_MODEL_ID = st.secrets["blockchain"]["ROBOFLOW_MODEL_ID"]  # ex. cows-mien3-33bgs/1
+
+# ---------------------------
+# Blockchain Setup
+# ---------------------------
 w3 = Web3(Web3.HTTPProvider(RPC_URL))
 account = w3.eth.account.from_key(PRIVATE_KEY)
-contract = w3.eth.contract(address=Web3.to_checksum_address(CONTRACT_ADDRESS), abi=ABI)
+contract = w3.eth.contract(
+    address=Web3.to_checksum_address(CONTRACT_ADDRESS), abi=ABI
+)
+
+# ---------------------------
+# Roboflow Inference client
+# ---------------------------
+CLIENT = InferenceHTTPClient(
+    api_url="https://serverless.roboflow.com",
+    api_key=ROBOFLOW_API
+)
 
 # ---------------------------
 # Upload Image
 # ---------------------------
-uploaded = st.file_uploader("Upload livestock image...", type=["jpg", "jpeg", "png"])
+uploaded = st.file_uploader("Upload a livestock image", type=["jpg", "jpeg", "png"])
 
 if uploaded:
     img = Image.open(uploaded)
     st.image(img, caption="Uploaded Image", use_column_width=True)
 
-    # Convert image to base64 for API
-    buffer = io.BytesIO()
-    img.save(buffer, format="JPEG")
-    img_b64 = base64.b64encode(buffer.getvalue()).decode()
+    # Convert image for inference
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG")
+    img_bytes = buf.getvalue()
 
-    st.subheader("🔍 AI Detection")
-    st.write("Running livestock detection via Roboflow Cloud...")
+    st.subheader("🔍 Running AI Livestock Detection...")
 
-    # Roboflow Hosted Infer API
-    response = requests.post(
-        "https://detect.roboflow.com/livestock/1",
-        params={"api_key": ROBOFLOW_API},
-        data=buffer.getvalue(),
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-    )
-
-    result = response.json()
+    # ---------------------------
+    # Run inference
+    # ---------------------------
+    result = CLIENT.infer(img_bytes, model_id=ROBOFLOW_MODEL_ID)
     st.json(result)
 
-    # Show detections
+    # Display labels
     if "predictions" in result:
-        labels = [p["class"] for p in result["predictions"]]
-        st.write("Detected Animals:", labels)
+        labels = list({p["class"] for p in result["predictions"]})
+        st.success(f"Detected animals: {', '.join(labels)}")
     else:
-        st.warning("No livestock detected")
+        st.warning("No livestock detected.")
 
-    # -----------------------
-    # NFT Mint
-    # -----------------------
-    token_uri = st.text_input("Enter Token URI", "https://example.com/metadata.json")
+    # ---------------------------
+    # NFT MINT SECTION
+    # ---------------------------
+    st.subheader("🪙 Mint Livestock NFT")
+    token_uri = st.text_input("Enter Token URI:", "https://example.com/metadata.json")
 
     if st.button("Mint NFT"):
         try:
@@ -71,17 +79,17 @@ if uploaded:
                 account.address,
                 token_uri
             ).build_transaction({
-                'from': account.address,
-                'nonce': nonce,
-                'gas': 300000,
-                'gasPrice': w3.eth.gas_price,
+                "from": account.address,
+                "nonce": nonce,
+                "gas": 350000,
+                "gasPrice": w3.eth.gas_price
             })
 
-            signed = w3.eth.account.sign_transaction(tx, PRIVATE_KEY)
-            tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
+            signed_tx = w3.eth.account.sign_transaction(tx, private_key=PRIVATE_KEY)
+            tx_hash = w3.eth.send_raw_transaction(signed_tx.rawTransaction)
 
             st.success("NFT Minted Successfully!")
-            st.write("🔗 Tx:", f"https://sepolia.etherscan.io/tx/{tx_hash.hex()}")
+            st.write("Transaction:", f"https://sepolia.etherscan.io/tx/{tx_hash.hex()}")
 
         except Exception as e:
             st.error(str(e))
