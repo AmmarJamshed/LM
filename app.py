@@ -1,93 +1,110 @@
 import streamlit as st
-import torch
 from web3 import Web3
 import json
-from pathlib import Path
+import time
+import os
+from ultralytics import YOLO
+import base64
+import requests
 
-# -----------------------------
+st.set_page_config(page_title="LivestockMon", layout="wide")
+
+# -------------------
 # Load secrets
-# -----------------------------
+# -------------------
 RPC_URL = st.secrets["blockchain"]["RPC_URL"]
 PRIVATE_KEY = st.secrets["blockchain"]["PRIVATE_KEY"]
 CONTRACT_ADDRESS = st.secrets["blockchain"]["CONTRACT_ADDRESS"]
-contract_abi = json.loads(st.secrets["blockchain"]["ABI"])
+ABI = json.loads(st.secrets["contract"]["ABI"])
 
-# -----------------------------
-# Web3 Setup
-# -----------------------------
-w3 = Web3(Web3.HTTPProvider(RPC_URL))
-account = w3.eth.account.from_key(PRIVATE_KEY)
+# -------------------
+# Setup blockchain
+# -------------------
+web3 = Web3(Web3.HTTPProvider(RPC_URL))
+account = web3.eth.account.from_key(PRIVATE_KEY)
+contract = web3.eth.contract(address=Web3.to_checksum_address(CONTRACT_ADDRESS), abi=ABI)
 
-# -----------------------------
-# Load Contract ABI
-# -----------------------------
-ABI_FILE = Path("contract_abi.json")
-if ABI_FILE.exists():
-    contract_abi = json.load(open(ABI_FILE))
-    contract = w3.eth.contract(address=CONTRACT_ADDRESS, abi=contract_abi)
-else:
-    contract = None
-
-# -----------------------------
+# -------------------
 # Load YOLO Model
-# -----------------------------
-@st.cache_resource
-def load_model():
-    return torch.hub.load("ultralytics/yolov5", "custom", path="yolov8n.pt")
+# -------------------
+model = YOLO("yolov8n.pt")
 
-model = load_model()
+# -------------------
+# Helper: Upload file to IPFS (Web3Storage)
+# -------------------
+W3S_TOKEN = "https://api.web3.storage/upload"
+# If you have a real token, set secrets["ipfs"]["W3S"] = "KEY"
 
-# -----------------------------
-# Streamlit UI
-# -----------------------------
-st.title("🐄 LivestockMon – AI Livestock Tracker + NFT Ownership")
+def upload_to_ipfs(file_bytes, file_name):
+    headers = {
+        "Authorization": f"Bearer {st.secrets['ipfs']['W3S']}",
+    }
+    files = {
+        "file": (file_name, file_bytes)
+    }
+    response = requests.post(W3S_TOKEN, headers=headers, files=files)
 
-st.write("Upload a livestock image for AI detection and minting.")
+    cid = response.json()["cid"]
+    return f"https://{cid}.ipfs.w3s.link/{file_name}"
 
-uploaded = st.file_uploader("Upload Image", type=["jpg", "png", "jpeg"])
+# -------------------
+# UI
+# -------------------
+st.title("🐄 LivestockMon — AI Livestock NFT Identity")
 
-if uploaded:
-    st.image(uploaded, caption="Uploaded Image", use_column_width=True)
+uploaded_image = st.file_uploader("Upload a livestock image", type=["jpg", "png", "jpeg"])
 
-    # Run YOLO on image
-    with open("temp.jpg", "wb") as f:
-        f.write(uploaded.getvalue())
+if uploaded_image:
 
-    results = model("temp.jpg")
-    st.image(results.render()[0], caption="AI Detection")
+    st.image(uploaded_image, caption="Uploaded Image", use_column_width=True)
 
-    st.success("Detection complete!")
+    # YOLO prediction
+    with st.spinner("Detecting livestock..."):
+        results = model.predict(uploaded_image.getvalue())
+        boxes = results[0].boxes
 
-    # -----------------------------
-    # Mint NFT Button
-    # -----------------------------
-    if st.button("Mint NFT on Blockchain"):
+    if len(boxes) == 0:
+        st.error("❌ No livestock detected.")
+        st.stop()
 
-        if contract is None:
-            st.error("Contract ABI missing. Upload contract_abi.json.")
-        else:
-            try:
-                # Prepare transaction
-                tx = contract.functions.mintLivestockNFT(
-                    account.address,
-                    "ipfs://sampleCIDofImage"
-                ).build_transaction({
-                    "from": account.address,
-                    "nonce": w3.eth.get_transaction_count(account.address),
-                    "gas": 400000,
-                    "gasPrice": w3.eth.gas_price
-                })
+    st.success(f"Detected {len(boxes)} animal(s).")
 
-                # Sign
-                signed_tx = w3.eth.account.sign_transaction(tx, private_key=PRIVATE_KEY)
+    # Upload image to IPFS
+    with st.spinner("Uploading image to IPFS..."):
+        image_ipfs = upload_to_ipfs(uploaded_image.getvalue(), uploaded_image.name)
 
-                # Send
-                tx_hash = w3.eth.send_raw_transaction(signed_tx.rawTransaction)
-                st.success(f"NFT Minted! Transaction Hash: {tx_hash.hex()}")
+    # Build metadata
+    metadata = {
+        "name": "Livestock Passport NFT",
+        "description": "Certified on-chain livestock identity",
+        "image": image_ipfs,
+    }
 
-            except Exception as e:
-                st.error(f"Error minting NFT: {str(e)}")
+    metadata_bytes = json.dumps(metadata).encode()
+    meta_ipfs = upload_to_ipfs(metadata_bytes, "metadata.json")
 
+    st.success("Metadata uploaded to IPFS!")
+    st.json(metadata)
 
-st.info("Private keys are securely stored using Streamlit Secrets (not in app.py).")
+    # Mint NFT
+    if st.button("Mint NFT"):
+        with st.spinner("Minting NFT on blockchain..."):
+            nonce = web3.eth.get_transaction_count(account.address)
 
+            txn = contract.functions.mintLivestockNFT(
+                account.address,
+                meta_ipfs
+            ).build_transaction({
+                "from": account.address,
+                "nonce": nonce,
+                "gas": 500000,
+                "gasPrice": web3.to_wei("2", "gwei"),
+            })
+
+            signed_txn = web3.eth.account.sign_transaction(txn, private_key=PRIVATE_KEY)
+            tx_hash = web3.eth.send_raw_transaction(signed_txn.rawTransaction)
+            receipt = web3.eth.wait_for_transaction_receipt(tx_hash)
+
+        st.success("NFT Minted Successfully!")
+        st.write("Transaction Hash:", tx_hash.hex())
+        st.write("Metadata:", meta_ipfs)
