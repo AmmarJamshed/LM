@@ -1,96 +1,91 @@
 import streamlit as st
+import torch
 from web3 import Web3
-from solcx import compile_standard, install_solc
 import json
-import base64
-import os
+from pathlib import Path
 
-st.set_page_config(page_title="LivestockMon", layout="wide")
+# -----------------------------
+# Load secrets
+# -----------------------------
+RPC_URL = st.secrets["blockchain"]["RPC_URL"]
+PRIVATE_KEY = st.secrets["blockchain"]["PRIVATE_KEY"]
+CONTRACT_ADDRESS = st.secrets["blockchain"]["CONTRACT_ADDRESS"]
 
-# -------------------------------
-# PWA injection
-# -------------------------------
-def inject_pwa():
-    st.markdown(
-        """
-        <link rel="manifest" href="/static/manifest.json" />
-        <script>
-            if ("serviceWorker" in navigator) {
-                navigator.serviceWorker.register("/static/service-worker.js");
-            }
-        </script>
-        """,
-        unsafe_allow_html=True,
-    )
+# -----------------------------
+# Web3 Setup
+# -----------------------------
+w3 = Web3(Web3.HTTPProvider(RPC_URL))
+account = w3.eth.account.from_key(PRIVATE_KEY)
 
-inject_pwa()
+# -----------------------------
+# Load Contract ABI
+# -----------------------------
+ABI_FILE = Path("contract_abi.json")
+if ABI_FILE.exists():
+    contract_abi = json.load(open(ABI_FILE))
+    contract = w3.eth.contract(address=CONTRACT_ADDRESS, abi=contract_abi)
+else:
+    contract = None
 
-# -------------------------------
-# Blockchain Setup
-# -------------------------------
-install_solc("0.8.20")
+# -----------------------------
+# Load YOLO Model
+# -----------------------------
+@st.cache_resource
+def load_model():
+    return torch.hub.load("ultralytics/yolov5", "custom", path="yolov8n.pt")
 
-with open("LivestockOwnershipNFT.sol", "r") as f:
-    contract_source = f.read()
+model = load_model()
 
-compiled = compile_standard(
-    {
-        "language": "Solidity",
-        "sources": {"LivestockOwnershipNFT.sol": {"content": contract_source}},
-        "settings": {"outputSelection": {"*": {"*": ["abi", "evm.bytecode"]}}},
-    },
-    solc_version="0.8.20",
-)
+# -----------------------------
+# Streamlit UI
+# -----------------------------
+st.title("🐄 LivestockMon – AI Livestock Tracker + NFT Ownership")
 
-abi = compiled["contracts"]["LivestockOwnershipNFT.sol"]["LivestockOwnershipNFT"]["abi"]
-bytecode = compiled["contracts"]["LivestockOwnershipNFT.sol"]["LivestockOwnershipNFT"]["evm"]["bytecode"]["object"]
+st.write("Upload a livestock image for AI detection and minting.")
 
-st.title("🐄 LivestockMon – Blockchain Livestock Ownership")
+uploaded = st.file_uploader("Upload Image", type=["jpg", "png", "jpeg"])
 
-rpc = st.text_input("Enter RPC URL (Polygon Amoy / Anryton / Hardhat):")
-pk = st.text_input("Private Key:", type="password")
+if uploaded:
+    st.image(uploaded, caption="Uploaded Image", use_column_width=True)
 
-if rpc and pk:
-    w3 = Web3(Web3.HTTPProvider(rpc))
-    acct = w3.eth.account.from_key(pk)
+    # Run YOLO on image
+    with open("temp.jpg", "wb") as f:
+        f.write(uploaded.getvalue())
 
-    st.success(f"Connected: {acct.address}")
+    results = model("temp.jpg")
+    st.image(results.render()[0], caption="AI Detection")
 
-    if st.button("Deploy Contract"):
-        Contract = w3.eth.contract(abi=abi, bytecode=bytecode)
+    st.success("Detection complete!")
 
-        tx = Contract.constructor().build_transaction({
-            "from": acct.address,
-            "nonce": w3.eth.get_transaction_count(acct.address),
-            "gas": 3000000,
-            "gasPrice": w3.eth.gas_price,
-        })
+    # -----------------------------
+    # Mint NFT Button
+    # -----------------------------
+    if st.button("Mint NFT on Blockchain"):
 
-        signed = acct.sign_transaction(tx)
-        tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
+        if contract is None:
+            st.error("Contract ABI missing. Upload contract_abi.json.")
+        else:
+            try:
+                # Prepare transaction
+                tx = contract.functions.mintLivestockNFT(
+                    account.address,
+                    "ipfs://sampleCIDofImage"
+                ).build_transaction({
+                    "from": account.address,
+                    "nonce": w3.eth.get_transaction_count(account.address),
+                    "gas": 400000,
+                    "gasPrice": w3.eth.gas_price
+                })
 
-        st.write("⏳ Deploying...")
-        tx_receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
+                # Sign
+                signed_tx = w3.eth.account.sign_transaction(tx, private_key=PRIVATE_KEY)
 
-        st.success(f"Contract deployed at {tx_receipt.contractAddress}")
-        st.session_state["contract"] = tx_receipt.contractAddress
+                # Send
+                tx_hash = w3.eth.send_raw_transaction(signed_tx.rawTransaction)
+                st.success(f"NFT Minted! Transaction Hash: {tx_hash.hex()}")
 
-if "contract" in st.session_state:
-    st.subheader("Mint Livestock NFT")
+            except Exception as e:
+                st.error(f"Error minting NFT: {str(e)}")
 
-    metadata = st.text_area("Livestock metadata (JSON or text):")
 
-    if metadata and st.button("Mint NFT"):
-        contract = w3.eth.contract(address=st.session_state["contract"], abi=abi)
-
-        tx = contract.functions.mint(metadata).build_transaction({
-            "from": acct.address,
-            "nonce": w3.eth.get_transaction_count(acct.address),
-            "gas": 3000000,
-            "gasPrice": w3.eth.gas_price,
-        })
-
-        signed = acct.sign_transaction(tx)
-        tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
-
-        st.success(f"Tx sent: {tx_hash.hex()}")
+st.info("Private keys are securely stored using Streamlit Secrets (not in app.py).")
