@@ -87,18 +87,23 @@ if file:
         "https://example.com/metadata.json"
     )
 
-    if st.button("Mint NFT"):
+    # Mint NFT Button
+if st.button("Mint NFT"):
+    # Validate Secrets
     if not RPC_URL or not PRIVATE_KEY:
-        st.error("Missing blockchain credentials!")
+        st.error("Missing blockchain credentials in Streamlit Secrets!")
     else:
         try:
+            # Load contract
             contract = w3.eth.contract(
                 address=Web3.to_checksum_address(CONTRACT_ADDRESS),
                 abi=ABI
             )
 
+            # Wallet
             account = w3.eth.account.from_key(PRIVATE_KEY)
 
+            # Build transaction
             tx = contract.functions.mintLivestockNFT(
                 account.address,
                 token_uri
@@ -109,15 +114,18 @@ if file:
                 "gasPrice": w3.eth.gas_price
             })
 
+            # Sign
             signed_tx = w3.eth.account.sign_transaction(tx, PRIVATE_KEY)
-            
-            # FIX HERE — always prepend 0x
-            tx_hash = "0x" + w3.eth.send_raw_transaction(signed_tx.raw_transaction).hex()
 
+            # Send + prepend 0x FIX
+            raw_hash = w3.eth.send_raw_transaction(signed_tx.raw_transaction)
+            tx_hash = "0x" + raw_hash.hex()
+
+            # Explorer link
             etherscan_url = f"https://sepolia.etherscan.io/tx/{tx_hash}"
 
             st.success("NFT Minted Successfully!")
-            st.write(etherscan_url)
+            st.markdown(f"[View Transaction on Etherscan]({etherscan_url})")
 
         except Exception as e:
-            st.error(str(e))
+            st.error(f"Error: {str(e)}")
