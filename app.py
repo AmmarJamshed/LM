@@ -88,32 +88,36 @@ if file:
     )
 
     if st.button("Mint NFT"):
+    if not RPC_URL or not PRIVATE_KEY:
+        st.error("Missing blockchain credentials!")
+    else:
         try:
-            nonce = w3.eth.get_transaction_count(account.address)
+            contract = w3.eth.contract(
+                address=Web3.to_checksum_address(CONTRACT_ADDRESS),
+                abi=ABI
+            )
+
+            account = w3.eth.account.from_key(PRIVATE_KEY)
 
             tx = contract.functions.mintLivestockNFT(
                 account.address,
                 token_uri
             ).build_transaction({
                 "from": account.address,
-                "nonce": nonce,
+                "nonce": w3.eth.get_transaction_count(account.address),
                 "gas": 300000,
                 "gasPrice": w3.eth.gas_price
             })
 
-            # Sign transaction
-            signed_tx = w3.eth.account.sign_transaction(
-                tx,
-                private_key=PRIVATE_KEY
-            )
+            signed_tx = w3.eth.account.sign_transaction(tx, PRIVATE_KEY)
+            
+            # FIX HERE — always prepend 0x
+            tx_hash = "0x" + w3.eth.send_raw_transaction(signed_tx.raw_transaction).hex()
 
-            # FIXED: correct attr for web3.py v6
-            tx_hash = w3.eth.send_raw_transaction(
-                signed_tx.raw_transaction
-            )
+            etherscan_url = f"https://sepolia.etherscan.io/tx/{tx_hash}"
 
             st.success("NFT Minted Successfully!")
-            st.write(f"https://sepolia.etherscan.io/tx/{tx_hash.hex()}")
+            st.write(etherscan_url)
 
         except Exception as e:
-            st.error(f"Error: {str(e)}")
+            st.error(str(e))
